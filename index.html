@@ -357,6 +357,36 @@ function settle(bal){
   return res;
 }
 
+/* ปัดยอดสุทธิเป็นจำนวนเต็มบาท แบบเกลี่ยให้ผลรวมเป็นศูนย์ (sum-zero) */
+function roundNetsToBaht(balNets){
+  const ids=Object.keys(balNets);
+  const exact=ids.map(id=>balNets[id]);
+  let rounded=exact.map(v=>Math.round(v));
+  let diff=rounded.reduce((a,b)=>a+b,0);          // ควรเป็น 0
+  const residual=ids.map((_,i)=>rounded[i]-exact[i]);
+  const order=ids.map((_,i)=>i);
+  if(diff>0){ order.sort((a,b)=>residual[b]-residual[a]); for(let k=0;k<diff&&k<order.length;k++) rounded[order[k]]-=1; }
+  else if(diff<0){ order.sort((a,b)=>residual[a]-residual[b]); for(let k=0;k<(-diff)&&k<order.length;k++) rounded[order[k]]+=1; }
+  const out={}; ids.forEach((id,i)=>out[id]=rounded[i]); return out;
+}
+/* คืนยอดที่ใช้แสดง/โอน ตามโหมดปัดเศษ (baht=บาทเต็ม, satang=มีสตางค์)
+   - bal: ใช้กับการ์ดยอดแต่ละคน + การโอน
+   - exact: ยอดจริง (มีสตางค์) ใช้กับตารางละเอียด */
+function effectiveBalances(tp){
+  const { bal, total } = computeBalances(tp);
+  const mode = state.roundMode || 'baht';
+  if(mode !== 'baht') return { bal, total, mode, exact: bal };
+  const nets={}; for(const id in bal) nets[id]=bal[id].net;
+  const rnet = roundNetsToBaht(nets);
+  const bal2={};
+  for(const id in bal){
+    const net = rnet[id];
+    bal2[id] = { paid: bal[id].paid, net: net, owed: bal[id].paid - net };
+  }
+  return { bal: bal2, total, mode, exact: bal };
+}
+function setRoundMode(m){ state.roundMode = m; save(); render(); }
+
 /* ---------- PromptPay QR (มาตรฐาน EMVCo) ---------- */
 function ppCrc16(str){
   let crc=0xFFFF;
@@ -524,11 +554,17 @@ function renderMembersTab(tp){
 }
 
 function renderSummaryTab(tp){
-  const {bal,total} = computeBalances(tp);
+  const { bal, total, mode, exact } = effectiveBalances(tp);
   if(total===0){
     return `<div class="empty"><div class="em">📊</div><div class="et">ยังไม่มีข้อมูลสรุป</div><div class="es">เพิ่มค่าใช้จ่ายก่อน แล้วกลับมาดูสรุปยอด</div></div>`;
   }
   let html = `<div class="total-banner"><div class="lbl">ยอดรวมทั้งทริป</div><div class="val">฿${fmt(total)}</div><div class="meta">${tp.members.length} คน · ${tp.expenses.length} รายการ</div></div>`;
+
+  // สลับโหมดปัดเศษ
+  html += `<div class="seg" style="margin-bottom:14px">
+    <button class="pick ${mode==='baht'?'sel':''}" onclick="setRoundMode('baht')">ปัดเป็นบาทเต็ม</button>
+    <button class="pick ${mode==='satang'?'sel':''}" onclick="setRoundMode('satang')">แบบมีสตางค์</button>
+  </div>`;
 
   html += `<button class="btn btn-outline" style="margin-bottom:16px" onclick="exportPDF()">📄 ดาวน์โหลดสรุปเป็น PDF</button>`;
 
@@ -545,6 +581,7 @@ function renderSummaryTab(tp){
     </div>`;
   }
   html += `</div>`;
+  if(mode==='baht') html += `<div class="hint" style="padding:0 4px 6px">ปัดยอดโอนเป็นจำนวนเต็มบาทเพื่อความสะดวก (เกลี่ยให้ยอดรวมตรงพอดี) · ดูยอดละเอียดมีสตางค์ได้ในตารางด้านล่าง</div>`;
 
   // ตารางรายละเอียดแบบ Excel (ใครจ่าย / หารใคร)
   html += `<div class="section-title">ตารางรายละเอียด (เช็คทีละรายการ)</div>`;
@@ -567,15 +604,15 @@ function renderSummaryTab(tp){
   }
   html += `</tbody><tfoot>`;
   html += `<tr><td class="lbl">รวมที่ต้องหาร</td><td>฿${fmt(total)}</td>`;
-  for(const m of tp.members) html += `<td>฿${fmt(bal[m.id].owed)}</td>`;
+  for(const m of tp.members) html += `<td>฿${fmt(exact[m.id].owed)}</td>`;
   html += `</tr>`;
   html += `<tr><td class="lbl">จ่ายจริง</td><td class="muted">–</td>`;
-  for(const m of tp.members) html += `<td>฿${fmt(bal[m.id].paid)}</td>`;
+  for(const m of tp.members) html += `<td>฿${fmt(exact[m.id].paid)}</td>`;
   html += `</tr>`;
   html += `<tr><td class="lbl">สุทธิ</td><td class="muted">–</td>`;
-  for(const m of tp.members){ const net=Math.round(bal[m.id].net*100)/100; const c=net>0.005?'pos':(net<-0.005?'neg':'muted'); html += `<td class="${c}">${net>0.005?'+':''}${fmt(net)}</td>`; }
+  for(const m of tp.members){ const net=Math.round(exact[m.id].net*100)/100; const c=net>0.005?'pos':(net<-0.005?'neg':'muted'); html += `<td class="${c}">${net>0.005?'+':''}${fmt(net)}</td>`; }
   html += `</tr></tfoot></table></div>`;
-  html += `<div class="hint" style="padding:6px 4px">เลื่อนตารางซ้าย–ขวาเพื่อดูครบทุกคน · 💳 = คนที่ออกเงินรายการนั้น · ตัวเลขในช่อง = ส่วนที่คนนั้นต้องหารของรายการนั้น · บวก = ได้คืน, ลบ = ต้องจ่ายเพิ่ม</div>`;
+  html += `<div class="hint" style="padding:6px 4px">ตารางนี้เป็น<strong>ยอดจริงละเอียด (มีสตางค์)</strong> ไว้เช็คทีละรายการ · 💳 = คนที่ออกเงินรายการนั้น · เลื่อนซ้าย–ขวาเพื่อดูครบทุกคน</div>`;
 
   // การโอน
   const tx = settle(bal);
@@ -1014,7 +1051,7 @@ function deleteExpense(id){
    ========================================================= */
 function buildSummaryText(){
   const tp=trip();
-  const {bal,total}=computeBalances(tp);
+  const {bal,total}=effectiveBalances(tp);
   const tx=settle(bal);
   let s=`📋 สรุปทริป: ${tp.name}\n`;
   s+=`💰 ยอดรวม ฿${fmt(total)} · ${tp.members.length} คน · ${tp.expenses.length} รายการ\n`;
@@ -1079,7 +1116,7 @@ async function copyAgain(){
    ดาวน์โหลดสรุปเป็น PDF (ถ่ายภาพหน้าสรุป -> ประกอบเป็น PDF)
    ========================================================= */
 function buildPrintable(tp){
-  const {bal,total}=computeBalances(tp);
+  const {bal,total,exact}=effectiveBalances(tp);
   const tx=settle(bal); const st=tp.settle||{};
   let now=''; try{ now=new Date().toLocaleString('th-TH',{dateStyle:'medium',timeStyle:'short'}); }catch(e){ now=new Date().toLocaleString(); }
   const wrap=document.createElement('div');
@@ -1117,9 +1154,9 @@ function buildPrintable(tp){
     h+=`</tr>`;
   }
   h+=`<tr style="border-top:2px solid #06C755;font-weight:700;background:#f4f6f8"><td style="padding:7px 8px">รวมที่ต้องหาร</td><td style="text-align:right;padding:7px 8px">฿${fmt(total)}</td>`;
-  for(const m of tp.members) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(bal[m.id].owed)}</td>`;
+  for(const m of tp.members) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(exact[m.id].owed)}</td>`;
   h+=`</tr><tr style="font-weight:700;background:#f4f6f8"><td style="padding:7px 8px">จ่ายจริง</td><td style="text-align:right;padding:7px 8px;color:#aab">–</td>`;
-  for(const m of tp.members) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(bal[m.id].paid)}</td>`;
+  for(const m of tp.members) h+=`<td style="text-align:right;padding:7px 8px">฿${fmt(exact[m.id].paid)}</td>`;
   h+=`</tr></table>`;
   // การโอน
   h+=`<div style="font-size:15px;font-weight:700;margin:14px 0 8px">การโอน (น้อยครั้งที่สุด)</div>`;
