@@ -566,8 +566,6 @@ function renderSummaryTab(tp){
     <button class="pick ${mode==='satang'?'sel':''}" onclick="setRoundMode('satang')">แบบมีสตางค์</button>
   </div>`;
 
-  html += `<button class="btn btn-outline" style="margin-bottom:16px" onclick="exportPDF()">📄 ดาวน์โหลดสรุปเป็น PDF</button>`;
-
   // ยอดแต่ละคน
   html += `<div class="section-title">ยอดของแต่ละคน</div><div class="card">`;
   for(const m of tp.members){
@@ -659,6 +657,8 @@ function renderSummaryTab(tp){
     });
     html += `</div><div class="hint" style="padding:0 4px">เคลียร์แล้ว ${paidCount}/${tx.length} รายการ · กด "จ่ายแล้ว" หรือ "แนบสลิป" เมื่อโอนเสร็จ · กดปุ่มด้านล่างเพื่อส่งสรุปเข้ากลุ่ม LINE</div>`;
   }
+  // ปุ่มพรีวิว/บันทึก PDF (เล็ก ๆ ไว้ล่างสุด)
+  html += `<div style="text-align:center;margin-top:16px"><button class="btn btn-ghost btn-sm" style="width:auto" onclick="exportPDF()">📄 พรีวิว / บันทึก PDF</button></div>`;
   return html;
 }
 
@@ -1204,8 +1204,15 @@ async function exportPDF(){
       heightLeft-=usable;
     }
     const fname=`สรุป-${(tp.name||'ทริป').replace(/[\\/:*?"<>|]/g,'')}.pdf`;
-    try{ pdf.save(fname); toast("บันทึก PDF แล้ว ✅"); }
-    catch(e){ try{ window.open(pdf.output('bloburl'),'_blank'); toast("เปิด PDF ในแท็บใหม่แล้ว"); }catch(_){ toast("บันทึกไม่สำเร็จ"); } }
+    // เปิดพรีวิว PDF (มือถือกดแชร์/เซฟเองได้) ถ้าเปิดไม่ได้ค่อยดาวน์โหลด
+    try{
+      const blobUrl = pdf.output('bloburl');
+      const w = window.open(blobUrl, '_blank');
+      if(w){ toast("เปิดพรีวิว PDF แล้ว"); }
+      else { pdf.save(fname); toast("บันทึก PDF แล้ว ✅"); }
+    }catch(e){
+      try{ pdf.save(fname); toast("บันทึก PDF แล้ว ✅"); }catch(_){ toast("สร้าง PDF ไม่สำเร็จ"); }
+    }
   }catch(err){
     toast("สร้าง PDF ไม่สำเร็จ ลองใหม่อีกครั้ง");
   }finally{
